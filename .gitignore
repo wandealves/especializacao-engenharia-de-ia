@@ -5,6 +5,7 @@ __pycache__/
 
 db
 images
+test_output
 
 # C extensions
 *.so
