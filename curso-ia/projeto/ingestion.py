@@ -3,13 +3,14 @@ import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastembed import TextEmbedding, SparseTextEmbedding
+from fastembed import TextEmbedding, SparseTextEmbedding, LateInteractionTextEmbedding
 from qdrant_client import QdrantClient, models
 
 load_dotenv()
 
 DENSE_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 SPARSE_MODEL = "Qdrant/bm25"
+COLBERT_MODEL = "colbert-ir/colbertv2.0"
 COLLECTION_NAME = "financial"
 FILE_PATH = Path(__file__).parent / "AAPL_10-K_1A_temp.md"
 
@@ -28,6 +29,13 @@ qdrant.recreate_collection(
             size=384,
             distance=models.Distance.COSINE,
         ),
+        "colbert": models.VectorParams(
+            size=128,
+            distance=models.Distance.COSINE,
+            multivector_config=models.MultiVectorConfig(
+                comparator=models.MultiVectorComparator.MAX_SIM,
+            ),
+        ),
     },
     sparse_vectors_config={"sparse": models.SparseVectorParams()},
 )
@@ -40,16 +48,20 @@ chuncks = [p.strip() for p in paragraphs if len(p.strip()) > 50]
 
 dense_model = TextEmbedding(DENSE_MODEL)
 sparce_model = SparseTextEmbedding(SPARSE_MODEL)
+colbert_model = LateInteractionTextEmbedding(COLBERT_MODEL)
 
 points = []
 for i, chunk in enumerate(chuncks):
     dense_embedding = list(dense_model.passage_embed(chunk))[0].tolist()
     sparse_embedding = list(sparce_model.passage_embed(chunk))[0].as_object()
+    colbert_embedding = list(colbert_model.passage_embed(chunk))[0].tolist()
+
     point = models.PointStruct(
         id=str(uuid.uuid4()),
         vector={
             "dense": dense_embedding,
             "sparse": sparse_embedding,
+            "colbert": colbert_embedding,
         },
         payload={
             "text": chunk,
@@ -66,21 +78,28 @@ qdrant.upload_points(
 query_text = "What are the main financial risks?"
 query_dense = list(dense_model.passage_embed(query_text))[0].tolist()
 query_sparse = list(sparce_model.passage_embed(query_text))[0].as_object()
-
-print("Query Dense", query_dense)
-print("Query Sparse", query_sparse)
+query_colbert = list(colbert_model.passage_embed(query_text))[0].tolist()
 
 results = qdrant.query_points(
     collection_name=COLLECTION_NAME,
     prefetch=[
-        {"query": query_dense, "using": "dense", "limit": 10},
-        {"query": query_sparse, "using": "sparse", "limit": 10},
+        {
+            "prefetch": [
+                {"query": query_dense, "using": "dense", "limit": 10},
+                {"query": query_sparse, "using": "sparse", "limit": 10},
+            ],
+            "query": models.FusionQuery(fusion=models.Fusion.RRF),
+            "limit": 20,
+        }
     ],
-    query=models.FusionQuery(fusion=models.Fusion.RRF),
+    query=query_colbert,
+    using="colbert",
     limit=3,
 )
 
+max_score = max(result.score for result in results.points)
 for result in results.points:
-    print(f"Score: {result.score}")
+    normalized_score = result.score / max_score if max_score > 0 else 0
+    print(f"Score: {normalized_score}")
     print(f"Text: {result.payload['text'][:100]}...")
     print("-" * 80)
