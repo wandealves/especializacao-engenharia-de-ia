@@ -5,6 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastembed import TextEmbedding, SparseTextEmbedding, LateInteractionTextEmbedding
 from qdrant_client import QdrantClient, models
+from utils.semantic_chunker import SemanticChunker
 
 load_dotenv()
 
@@ -13,6 +14,7 @@ SPARSE_MODEL = "Qdrant/bm25"
 COLBERT_MODEL = "colbert-ir/colbertv2.0"
 COLLECTION_NAME = "financial"
 FILE_PATH = Path(__file__).parent / "AAPL_10-K_1A_temp.md"
+MAX_TOKENS = 300
 
 qdrant = QdrantClient(
     url=os.getenv("QDRANT_URL"),
@@ -43,15 +45,15 @@ qdrant.recreate_collection(
 with open(FILE_PATH, "r", encoding="utf-8") as f:
     content = f.read()
 
-paragraphs = content.split("\n\n")
-chuncks = [p.strip() for p in paragraphs if len(p.strip()) > 50]
+chunker = SemanticChunker(max_tokens=MAX_TOKENS)
+chunks = chunker.create_chunks(content)
 
 dense_model = TextEmbedding(DENSE_MODEL)
 sparce_model = SparseTextEmbedding(SPARSE_MODEL)
 colbert_model = LateInteractionTextEmbedding(COLBERT_MODEL)
 
 points = []
-for i, chunk in enumerate(chuncks):
+for i, chunk in enumerate(chunks):
     dense_embedding = list(dense_model.passage_embed(chunk))[0].tolist()
     sparse_embedding = list(sparce_model.passage_embed(chunk))[0].as_object()
     colbert_embedding = list(colbert_model.passage_embed(chunk))[0].tolist()
