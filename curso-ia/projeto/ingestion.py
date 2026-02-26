@@ -1,11 +1,11 @@
 import os
 import uuid
-from pathlib import Path
 
 from dotenv import load_dotenv
 from fastembed import TextEmbedding, SparseTextEmbedding, LateInteractionTextEmbedding
 from qdrant_client import QdrantClient, models
 from utils.semantic_chunker import SemanticChunker
+from utils.edgar_client import EdgarClient
 
 load_dotenv()
 
@@ -13,7 +13,7 @@ DENSE_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 SPARSE_MODEL = "Qdrant/bm25"
 COLBERT_MODEL = "colbert-ir/colbertv2.0"
 COLLECTION_NAME = "financial"
-FILE_PATH = Path(__file__).parent / "AAPL_10-K_1A_temp.md"
+EMAIL = EMAIL = os.getenv("EDGAR_EMAIL")
 MAX_TOKENS = 300
 
 qdrant = QdrantClient(
@@ -21,42 +21,34 @@ qdrant = QdrantClient(
     api_key=os.getenv("QDRANT_API_KEY"),
 )
 
-qdrant.delete_collection(
-    collection_name=COLLECTION_NAME,
-)
-qdrant.recreate_collection(
-    collection_name=COLLECTION_NAME,
-    vectors_config={
-        "dense": models.VectorParams(
-            size=384,
-            distance=models.Distance.COSINE,
-        ),
-        "colbert": models.VectorParams(
-            size=128,
-            distance=models.Distance.COSINE,
-            multivector_config=models.MultiVectorConfig(
-                comparator=models.MultiVectorComparator.MAX_SIM,
-            ),
-        ),
-    },
-    sparse_vectors_config={"sparse": models.SparseVectorParams()},
-)
+edgar = EdgarClient(email=EMAIL)
 
-with open(FILE_PATH, "r", encoding="utf-8") as f:
-    content = f.read()
+data_10k = edgar.fetch_filing_data("AAPL", "10-K")
+text_10k = edgar.get_combined_text(data_10k)
+
+data_10q = edgar.fetch_filing_data("AAPL", "10-Q")
+text_10q = edgar.get_combined_text(data_10q)
 
 chunker = SemanticChunker(max_tokens=MAX_TOKENS)
-chunks = chunker.create_chunks(content)
+
+all_chunks = []
+for data, text in [(data_10k, text_10k), (data_10q, text_10q)]:
+    chunks = chunker.create_chunks(text)
+    for chunk in chunks:
+        all_chunks.append({"text": chunk, "metadata": data["metadata"]})
 
 dense_model = TextEmbedding(DENSE_MODEL)
-sparce_model = SparseTextEmbedding(SPARSE_MODEL)
+sparse_model = SparseTextEmbedding(SPARSE_MODEL)
 colbert_model = LateInteractionTextEmbedding(COLBERT_MODEL)
 
 points = []
-for i, chunk in enumerate(chunks):
-    dense_embedding = list(dense_model.passage_embed(chunk))[0].tolist()
-    sparse_embedding = list(sparce_model.passage_embed(chunk))[0].as_object()
-    colbert_embedding = list(colbert_model.passage_embed(chunk))[0].tolist()
+for chunk_data in all_chunks:
+    chunk = chunk_data["text"]
+    metadata = chunk_data["metadata"]
+
+    dense_embedding = list(dense_model.passage_embed([chunk]))[0].tolist()
+    sparse_embedding = list(sparse_model.passage_embed([chunk]))[0].as_object()
+    colbert_embedding = list(colbert_model.passage_embed([chunk]))[0].tolist()
 
     point = models.PointStruct(
         id=str(uuid.uuid4()),
@@ -65,43 +57,8 @@ for i, chunk in enumerate(chunks):
             "sparse": sparse_embedding,
             "colbert": colbert_embedding,
         },
-        payload={
-            "text": chunk,
-            "source": FILE_PATH,
-        },
+        payload={"text": chunk, "metadata": metadata},
     )
     points.append(point)
 
-qdrant.upload_points(
-    collection_name=COLLECTION_NAME,
-    points=points,
-)
-
-query_text = "What are the main financial risks?"
-query_dense = list(dense_model.passage_embed(query_text))[0].tolist()
-query_sparse = list(sparce_model.passage_embed(query_text))[0].as_object()
-query_colbert = list(colbert_model.passage_embed(query_text))[0].tolist()
-
-results = qdrant.query_points(
-    collection_name=COLLECTION_NAME,
-    prefetch=[
-        {
-            "prefetch": [
-                {"query": query_dense, "using": "dense", "limit": 10},
-                {"query": query_sparse, "using": "sparse", "limit": 10},
-            ],
-            "query": models.FusionQuery(fusion=models.Fusion.RRF),
-            "limit": 20,
-        }
-    ],
-    query=query_colbert,
-    using="colbert",
-    limit=3,
-)
-
-max_score = max(result.score for result in results.points)
-for result in results.points:
-    normalized_score = result.score / max_score if max_score > 0 else 0
-    print(f"Score: {normalized_score}")
-    print(f"Text: {result.payload['text'][:100]}...")
-    print("-" * 80)
+qdrant.upload_points(collection_name=COLLECTION_NAME, points=points, batch_size=5)
