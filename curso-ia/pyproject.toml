@@ -17,6 +17,7 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "qdrant-client[fastembed]>=1.16.2",
     "sentence-transformers>=5.2.2",
+    "uvicorn>=0.41.0",
 ]
 
 [dependency-groups]
