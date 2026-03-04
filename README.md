@@ -1,5 +1,7 @@
 # Curso de Engenharia de IA
 
+[🇺🇸 Read in English](README.en.md) | [🇵🇹 Ler em português](README.md)
+
 Projeto desenvolvido como parte do curso de especialização em Engenharia de Inteligência Artificial. Este repositório contém exemplos práticos e implementações de conceitos de IA, incluindo processamento de documentos, RAG (Retrieval-Augmented Generation) e ingestão de dados financeiros.
 
 ## 📋 Pré-requisitos
