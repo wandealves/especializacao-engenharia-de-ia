@@ -1,6 +1,6 @@
 # AI Engineering Course
 
-[🇺🇸 Read in English](README.en.md) | [🇵🇹 Ler em português](README.md)
+[🇺🇸 Read in English](README.en.md) | [🇧🇷 Ler em português do Brasil](README.md)
 
 Project developed as part of the AI Engineering specialization course. This repository contains practical examples and implementations of AI concepts, including document processing, RAG (Retrieval-Augmented Generation), and financial data ingestion.
 
